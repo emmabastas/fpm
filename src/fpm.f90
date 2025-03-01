@@ -9,6 +9,7 @@ use fpm_command_line, only: fpm_build_settings, fpm_new_settings, &
 use fpm_dependency, only : new_dependency_tree
 use fpm_filesystem, only: is_dir, join_path, list_files, exists, &
                    basename, filewrite, mkdir, run, os_delete_dir
+use fpm_lock, only: fpm_lock_package, fpm_unlock_package
 use fpm_model, only: fpm_model_t, srcfile_t, show_model, fortran_features_t, &
                     FPM_SCOPE_UNKNOWN, FPM_SCOPE_LIB, FPM_SCOPE_DEP, &
                     FPM_SCOPE_APP, FPM_SCOPE_EXAMPLE, FPM_SCOPE_TEST
@@ -487,6 +488,8 @@ subroutine cmd_run(settings,test)
     integer, allocatable :: stat(:),target_ID(:)
     character(len=:),allocatable :: line
 
+    call fpm_lock_package()
+
     call get_package_data(package, "fpm.toml", error, apply_defaults=.true.)
     if (allocated(error)) then
         call fpm_stop(1, '*cmd_run* Package error: '//error%message)
@@ -574,6 +577,8 @@ subroutine cmd_run(settings,test)
     end if
 
     call build_package(targets,model,verbose=settings%verbose)
+
+    call fpm_unlock_package()
 
     if (settings%list) then
          call compact_list()
