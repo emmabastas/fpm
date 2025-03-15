@@ -54,75 +54,216 @@
 
 module fpm_lock
 
+use :: fpm_error, only : error_t, fatal_error
 use, intrinsic :: iso_fortran_env, only : stdin => input_unit, &
                                         & stdout => output_unit, &
                                         & stderr => error_unit
 
 implicit none
 private
-public :: fpm_lock_package, fpm_unlock_package
+public :: fpm_lock_acquire, fpm_lock_release
 
-integer :: lock_unit = 0  !> value of 0 indicates that we don't have a lock.
+logical :: has_lock = .false.
 
 contains
 
-!> This subroutine blocks until it has acquired a lock on the package directory.
-!> You're not allowed to call this subroutine multiple times!
-subroutine fpm_lock_package()
-  logical :: acquired
+subroutine acquire_lock(error)
+    !> Error handling
+    type(error_t), allocatable, intent(out) :: error
 
-  if (lock_unit /= 0) then
-     error stop "fpm_lock: double-lock"
-  end if
+    !> unit for open lock-file
+    integer :: lock_unit
 
-  call acquire_lock(acquired)
+    !> Error status and message
+    integer :: iostat
+    integer :: iostat2
+    character(len=256) :: iomsg
 
-  ! TODO(emma): Can we do something better than busy waiting? For instance,
-  !             something similar to Linux's `inotify`, but cross-platform.
-  do while (.not. acquired)
+    logical :: exists
+    integer :: lock_pid
 
-     write(stderr, *) "fpm_lock: Waiting to acuire lock..."
-     call sleep(1)
+    if (has_lock) then
+        call fatal_error (error, &
+            "Tried locking package directory when it's already locked")
+        has_lock = .false.
+        return
+    end if
 
-     call acquire_lock(acquired)
+    ! TODO(@emmabastas): It's imperative that we create the lockfile in an
+    !     atomic manner, I don't know if this is atomic.
+    open( &
+        file='.fpm-package-lock', &
+        !status='new', &
+        action='readwrite', &
+        newunit=lock_unit &
+        )
+    inquire(unit=lock_unit, iostat=iostat, exist=exists, iomsg=iomsg)
 
-     if (acquired) then
-        write(stderr, *) "Acquired lock!"
-     end if
-  end do
-end subroutine fpm_lock_package
+    ! An error occured when opening the file. It could happen because some other
+    ! process has the file open already, or something went wrong. In any case
+    ! we didn't acquire a lock.
+    if (iostat > 0) then
+        lock_pid = 0
+        return
+    end if
 
-subroutine acquire_lock(acquired)
-  logical, intent(out) :: acquired
+    ! The lock-file already exists and we managed to open it; This probably means
+    ! that another fpm process has a lock already, but there are some edge cases
+    ! we need to check before we can be sure.
+    if (iostat == 0 .and. exists) then
+        read(unit=lock_unit, fmt='(1I256)', iostat=iostat, iomsg=iomsg) lock_pid
 
-  integer :: iostat
+        ! If iostat is negative we reached EOF, and the lock-file contents is
+        ! not valid, so we assume there is no lock.
+        if (iostat < 0) then
+            rewind(unit=lock_unit, iostat=iostat2, iomsg=iomsg)
+            if (iostat2 > 0) then
+                call fatal_error(error, &
+                    "Error rewinding lock-file '"//iomsg//"'")
+                has_lock = .false.
+                return
+            end if
 
-  ! TODO(emma): Write PID to lockfile.
-  ! TODO(emma): Check if a previous fpm process died without removing lockfile.
+        ! If iostat is positive some error occured.
+        else if (iostat > 0) then
+            call fatal_error(error, "Error reading lock-file '"//iomsg//"'")
+            has_lock = .false.
+            return
 
-  ! TODO(emma): It's imperative that we create the lockfile in an atomic manner,
-  !             I don't know if this is atomic.
-  open(file='.fpm-package-lock', status='new', action='readwrite', iostat=iostat, newunit=lock_unit)
+        ! Handle the very rare sitation where fpm process A acquires a lock, but
+        ! dies without removing the lock-file, and a new fpm process B is started
+        ! and is assigned the same PID that A had.
+        else if (lock_pid == getpid()) then
+            ! TODO(@emmabastas) handle error
+            rewind(unit=lock_unit)
 
-  acquired = iostat == 0
+        ! Check if the process that acquired the lock died without removing the
+        ! lockfile.
+        else if (.not. process_alive(lock_pid)) then
+            ! TODO(@emmabastas)
+            error stop ""
+
+            ! TODO(@emmabastas): In the case the process is alive it could be wise
+            !     to see what name it has, in case fpm process A acquired the lock,
+            !     then died without removing the lockfile. Then a new non-fpm
+            !     process is created with the same PID that A had.
+
+        ! At this point we know that that another process has a lock on the
+        ! package.
+        else
+            close(unit=lock_pid)
+            lock_pid = 0
+            return
+        end if
+    end if
+
+    ! If we get all the way here it means either that the lock-file didn't exist
+    ! and we created it, or the lockfile existed but had been created by a
+    ! now dead fpm process. In any case we have the lock at this point.
+
+    write(unit=lock_unit, fmt='(1I256)') getpid()
+    inquire(unit=lock_unit, iostat=iostat)
+    if (iostat > 0) then
+        error stop ""
+    end if
+
+    ! TODO(@emmabastas) error handling
+    close(unit=lock_unit)
+
+    has_lock = .true.
 end subroutine acquire_lock
 
-subroutine fpm_unlock_package()
-  integer :: iostat
+!> This subroutine blocks until it has acquired a lock on the package directory.
+!> You're not allowed to call this subroutine multiple times!
+subroutine fpm_lock_acquire(error)
+    !> Error handling
+    type(error_t), allocatable, intent(out) :: error
 
-  if (lock_unit == 0) then
-     error stop "fpm_lock: I tried unlocking the package, but I hadn't locked it in the first place!"
-  end if
+    call acquire_lock(error)
+    if (allocated(error)) then
+        return
+    end if
 
-  ! TODO(emma): It's imperative that we delete the lockfile in an atomic manner,
-  !             I don't know if this is atomic.
-  close(lock_unit, status='delete', iostat=iostat)
+    ! TODO(emma): Can we do something better than busy waiting? For instance,
+    !             something similar to Linux's `inotify`, but cross-platform.
+    do while (.not. has_lock)
 
-  if (iostat /= 0) then
-     error stop "fpm_lock: I tried to unlock the package by deleting the .package-lock.lcok file, but it failed!"
-  end if
+        write(stderr, *) "fpm_lock: Waiting to acquire lock..."
+        call sleep(1)
 
-  lock_unit = 0
-end subroutine fpm_unlock_package
+        call acquire_lock(error)
+    end do
+
+    write(stderr, *) "Acquired lock!"
+end subroutine fpm_lock_acquire
+
+subroutine fpm_lock_release(error)
+    !> Error handling
+    type(error_t), allocatable, intent(out) :: error
+
+    integer :: lock_unit
+
+    integer :: iostat
+    character(len=256) :: iomsg
+
+    if (.not. has_lock) then
+        call fatal_error(error, &
+            "Tried unlocking package directory when it wasn't locked")
+        has_lock = .false.
+        return
+    end if
+
+    ! TODO(emma): Is open + close atomic?
+
+    open( &
+        file='.fpm-package-lock', &
+        newunit=lock_unit, &
+        status='old', &
+        iostat=iostat, &
+        iomsg=iomsg &
+        )
+    if (iostat /= 0) then
+        call fatal_error(error, &
+            "Error opening lock-file for deletion '"//iomsg//"'")
+        has_lock = .false.
+        return
+    end if
+
+    close(unit=lock_unit, status='delete', iostat=iostat, iomsg=iomsg)
+
+    if (iostat /= 0) then
+        call fatal_error(error, "Error deleting lock-file '"//iomsg//"'")
+        has_lock = .false.
+        return
+    end if
+
+    write(stderr, *) "fpm_lock: Released lock."
+    has_lock=.false.
+end subroutine fpm_lock_release
+
+! This has a race condition: It's possible that a new process with `pid` is
+! created just after `process_alive` returned false
+function process_alive(pid) result(alive)
+    use iso_c_binding, only : c_int
+    integer, intent(in)  :: pid
+    logical              :: alive
+
+    integer :: status
+
+    interface
+        function c_kill(pid, sig) result(status) bind(c, name="kill")
+            ! TODO(emma): The of `pid` should really be `pid_t`, but on modern
+            !             platforms this is always and `int`, but still..
+            import c_int
+            integer(kind=c_int), intent(in), value :: pid
+            integer(kind=c_int), intent(in), value :: sig
+            integer(kind=c_int) :: status
+        end function c_kill
+    end interface
+
+    ! This is a common trick to check if a process is alive with POSIX C.
+    status = c_kill(pid, 0)
+    alive = status == 0
+end function process_alive
 
 end module fpm_lock
