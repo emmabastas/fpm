@@ -11,6 +11,7 @@ module test_lock
     private
     public :: collect_lock
 
+! These C functions are defined in `test_lock.c`
 interface
     subroutine c_dummy_process_start(pid) bind(c, name = "c_dummy_process_start")
         import c_int
@@ -29,7 +30,7 @@ contains
     !> Collect unit tests.
     subroutine collect_lock(tests)
 
-        !> Unit tests to collet.
+        !> Unit tests to collect.
         type(unittest_t), allocatable, intent(out) :: tests(:)
 
         tests = [ &
@@ -45,7 +46,6 @@ contains
         & new_unittest('acquire-existing-lockfile-dead-pid', acquire_existing_lockfile_dead_pid), &
         & new_unittest('acquire-already-opened-lockfile', acquire_already_opened_lockfile) &
         ]
-
     end subroutine collect_lock
 
     subroutine delete_lock_file
@@ -125,6 +125,8 @@ contains
         call fpm_lock_release(error)
     end subroutine acquire_release_release
 
+    !> If a lock-file already exists but has no content then we should acquire
+    !> a lock.
     subroutine acquire_existing_lockfile_empty(error)
         type(error_t), allocatable, intent(out) :: error
         integer :: pid
@@ -139,6 +141,8 @@ contains
         end if
     end subroutine acquire_existing_lockfile_empty
 
+    !> If a lock-file already exists but as some invalid content then we should
+    !> acquire a lock.
     subroutine acquire_existing_lockfile_garbled(error)
         type(error_t), allocatable, intent(out) :: error
         integer :: pid
@@ -155,6 +159,8 @@ contains
         call fpm_lock_release(error)
     end subroutine acquire_existing_lockfile_garbled
 
+    !> If a lock-file already exists and and was created by a still-running
+    !> process then we shouldn't acquire a lock.
     subroutine acquire_existing_lockfile_valid(error)
         type(error_t), allocatable, intent(out) :: error
         integer :: pid
@@ -197,6 +203,9 @@ contains
         call kill_process(pid, error)
     end subroutine acquire_existing_lockfile_valid
 
+    !> If a valid lock-file already exists but it was created by a now-dead
+    !> process that happened to have the same PID that we have now then we
+    !> should still acquire a lock. (this is a very rare edge-case)
     subroutine acquire_existing_lockfile_same_pid(error)
         type(error_t), allocatable, intent(out) :: error
         logical :: success
@@ -233,6 +242,8 @@ contains
         call fpm_lock_release(error)
     end subroutine acquire_existing_lockfile_same_pid
 
+    !> If a valid lock-file already exists but it was created by a now-dead
+    !> process then we should acquire a lock.
     subroutine acquire_existing_lockfile_dead_pid(error)
         type(error_t), allocatable, intent(out) :: error
         integer :: pid
@@ -279,6 +290,8 @@ contains
         call fpm_lock_release(error)
     end subroutine acquire_existing_lockfile_dead_pid
 
+    !> If a lock-file already exists and some other process has opened it for
+    !> reading or writing then we shouldn't acquire a lock.
     subroutine acquire_already_opened_lockfile(error)
         type(error_t), allocatable, intent(out) :: error
         logical :: success
@@ -286,7 +299,7 @@ contains
         ! Clean up if needed.
         call run('rm -f .fpm-package-lock')
 
-        ! Create a lock-file and keep it open indeffinetly
+        ! Create a lock-file and keep it open indefinitely
         call run('touch .fpm-package-lock && tail -f .fpm-package-lock &')
 
         ! Even though the lock file is empty we expect that no lock is
