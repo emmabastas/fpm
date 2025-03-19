@@ -183,6 +183,7 @@ contains
 
         ! We expect this to not succeed, (but no errors should be raised).
         call fpm_lock_acquire_noblock(error, success=success)
+        if (allocated(error)) return
 
         if (success) then
             call test_failed(error, &
@@ -220,6 +221,8 @@ contains
 
         ! We expect this to succeed.
         call fpm_lock_acquire_noblock(error, success=success)
+        if (allocated(error)) return
+
         if (.not. success) then
             call test_failed(error, &
                 "Expected package to lock succeed")
@@ -237,7 +240,7 @@ contains
         ! Clean up if needed.
         call run('rm -f .fpm-package-lock')
 
-        ! Simulate some other process
+        ! Simulate some other process.
         call dummy_process_start(pid, error)
         if (allocated(error)) return
 
@@ -260,8 +263,10 @@ contains
         call kill_process(pid, error)
         if (allocated(error)) return
 
-        ! Since the other process is dead we expect this to succeed.
+        ! Since the other process is dead we expect this to succeed (but it
+        ! souldn't raise an error).
         call fpm_lock_acquire_noblock(error, success=success)
+        if (allocated(error)) return
 
         if (.not. success) then
             call test_failed(error, &
