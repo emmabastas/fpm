@@ -88,14 +88,17 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
 
     integer :: pid_local
 
-    !> unit for open lock-file
+    ! unit for open lock-file
     integer :: lock_unit
 
-    !> Error status and message
+    ! Error status and message
     integer :: iostat
     character(len=256) :: iomsg
 
+    ! Did the file exist already or not.
     logical :: exists
+
+    ! If the file contains a PID we put it here.
     integer :: lock_pid
 
     if (present(pid)) then
