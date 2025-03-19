@@ -114,15 +114,13 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
         return
     end if
 
-    ! TODO(@emmabastas): It's imperative that we create the lockfile in an
-    !     atomic manner, I don't know if this is atomic.
     open( &
         file='.fpm-package-lock', &
-        !status='new', &
         action='readwrite', &
-        newunit=lock_unit &
-        )
-    inquire(unit=lock_unit, iostat=iostat, exist=exists, iomsg=iomsg)
+        newunit=lock_unit, &
+        iostat=iostat, &
+        iomsg=iomsg)
+    inquire(unit=lock_unit, exist=exists)
 
     ! An error occured when opening the file. It could happen because some other
     ! process has the file open already, or something went wrong. In any case
@@ -165,24 +163,25 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
         ! it wans't valid, so we should go ahead an acquire the lock.
     end if
 
-    rewind(unit=lock_unit, iostat=iostat) ! TODO(@emmabastas) handle errors
+    rewind(unit=lock_unit, iostat=iostat, iomsg=iomsg)
     if (iostat > 0) then
-        ! TODO(@emmabastas) error handling
-        error stop "TODO 3"
-    end if
-    write(unit=lock_unit, fmt='(1I256)') pid_local
-
-    inquire(unit=lock_unit, iostat=iostat)
-    if (iostat > 0) then
-        ! TODO(@emmabastas) error handling
-        error stop "TODO 2"
+        call fatal_error(error, "Error rewinding lock-file " // iomsg)
+        if (present(success)) success = .false.
+        return
     end if
 
-    ! TODO(@emmabastas) error handling
-    close(unit=lock_unit)
+    write(unit=lock_unit, fmt='(1I256)', iostat=iostat, iomsg=iomsg) pid_local
     if (iostat > 0) then
-        ! TODO(@emmabastas) error handling
-        error stop "TODO 4"
+        call fatal_error(error, "Error writing to lock-file " // iomsg)
+        if (present(success)) success = .false.
+        return
+    end if
+
+    close(unit=lock_unit, iostat=iostat, iomsg=iomsg)
+    if (iostat > 0) then
+        call fatal_error(error, "Error closing lock-file " // iomsg)
+        if (present(success)) success = .false.
+        return
     end if
 
     has_lock = .true.
@@ -203,9 +202,7 @@ subroutine fpm_lock_acquire(error)
     ! TODO(emma): Can we do something better than busy waiting? For instance,
     !             something similar to Linux's `inotify`, but cross-platform.
     do while (.not. got_lock)
-
         call sleep(1)
-
         call fpm_lock_acquire_noblock(error, success=got_lock)
         if (allocated(error)) return
     end do
@@ -227,15 +224,12 @@ subroutine fpm_lock_release(error)
         return
     end if
 
-    ! TODO(emma): Is open + close atomic?
-
     open( &
         file='.fpm-package-lock', &
         newunit=lock_unit, &
         status='old', &
         iostat=iostat, &
-        iomsg=iomsg &
-        )
+        iomsg=iomsg)
     if (iostat /= 0) then
         call fatal_error(error, &
             "Error opening lock-file for deletion '"//iomsg//"'")
