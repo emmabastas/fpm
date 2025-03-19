@@ -42,7 +42,8 @@ contains
         & new_unittest('acquire-existing-lockfile-garbled', acquire_existing_lockfile_garbled), &
         & new_unittest('acquire-existing-lockfile-valid', acquire_existing_lockfile_valid), &
         & new_unittest('acquire-existing-lockfile-same-pid', acquire_existing_lockfile_same_pid), &
-        & new_unittest('acquire-existing-lockfile-dead-pid', acquire_existing_lockfile_dead_pid) &
+        & new_unittest('acquire-existing-lockfile-dead-pid', acquire_existing_lockfile_dead_pid), &
+        & new_unittest('acquire-already-opened-lockfile', acquire_already_opened_lockfile) &
         ]
 
     end subroutine collect_lock
@@ -278,4 +279,28 @@ contains
         call fpm_lock_release(error)
     end subroutine acquire_existing_lockfile_dead_pid
 
+    subroutine acquire_already_opened_lockfile(error)
+        type(error_t), allocatable, intent(out) :: error
+        logical :: success
+
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
+        ! Create a lock-file and keep it open indeffinetly
+        call run('touch .fpm-package-lock && tail -f .fpm-package-lock &')
+
+        ! Even though the lock file is empty we expect that no lock is
+        ! acquired since another process actively has the lock-file open.
+        call fpm_lock_acquire_noblock(error, success=success)
+        if (allocated(error)) return
+
+        if (success) then
+            call test_failed(error, &
+                "Expected package lock to fail but it succeeded")
+            call fpm_lock_release(error)
+        end if
+
+        ! Clean up.
+        call run('rm -f .fpm-package-lock')
+    end subroutine acquire_already_opened_lockfile
 end module test_lock
