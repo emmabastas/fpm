@@ -2,8 +2,12 @@
 
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <errno.h>
 
 void c_dummy_process_start(pid_t *pid) {
     *pid = fork();
@@ -17,5 +21,28 @@ void c_dummy_process_start(pid_t *pid) {
 }
 
 void c_kill_process(pid_t *pid, int *stat) {
-    *stat = kill(*pid, SIGTERM);
+    // Kill the process.
+    *stat = kill(*pid, SIGKILL);
+
+    if (*stat == -1) {
+        return;
+    }
+
+    // Wait until process has actually died.
+    while(true) {
+        int status;
+        int ret = waitpid(*pid, &status, 0);
+
+        if (ret == *pid) {  // The child process was killed.
+            return;
+        }
+
+        if (ret == -1 && errno == ECHILD) {  // The child process was killed
+                                             // before we entered the loop.
+            return;
+        }
+
+        // Something went wrong
+        exit(-1);
+    }
 }
