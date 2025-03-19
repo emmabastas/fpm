@@ -56,6 +56,7 @@
 module fpm_lock
 
 use :: fpm_error, only : error_t, fatal_error
+use :: iso_c_binding, only : c_int, c_bool
 
 implicit none
 private
@@ -63,7 +64,22 @@ public :: fpm_lock_acquire, fpm_lock_acquire_noblock, fpm_lock_release
 
 logical :: has_lock = .false.
 
+! These are defined in `fpm_lock.c`
+interface
+    subroutine c_process_alive(pid, alive) bind(c, name="c_process_alive")
+        import c_int, c_bool
+        integer(kind=c_int),  intent(in)  :: pid
+        logical(kind=c_bool), intent(out) :: alive
+    end subroutine c_process_alive
+end interface
+
 contains
+
+function process_alive(pid) result(alive)
+    integer(kind=c_int), intent(in) :: pid
+    logical(kind=c_bool) :: alive
+    call c_process_alive(pid, alive)
+end function process_alive
 
 subroutine fpm_lock_acquire_noblock(error, success, pid)
     type(error_t), allocatable, intent(out) :: error
@@ -131,12 +147,15 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
         ! If iostat is zero then we managed to parse an integer in the lock-file.
         ! If the parsed integer corresponds to the PID of a running process that
         ! isn't this current process then that process has the lock
-        if (iostat == 0 .and. lock_pid /= pid_local &
-            .and. process_alive(lock_pid)) then
-
-            close(unit=lock_unit)
-            if (present(success)) success = .false.
-            return
+        if (iostat == 0 .and. lock_pid /= pid_local) then
+            ! Fortran doesn't short-circut boolean expressions, hence the
+            ! nesting; We only want to check `process_alive` if `lock_pid` is
+            ! valid!
+            if (process_alive(lock_pid)) then
+                close(unit=lock_unit)
+                if (present(success)) success = .false.
+                return
+            end if
         end if
 
         ! At this point we conclude that altough the lock-file already existed
@@ -231,30 +250,5 @@ subroutine fpm_lock_release(error)
 
     has_lock=.false.
 end subroutine fpm_lock_release
-
-! This has a race condition: It's possible that a new process with `pid` is
-! created just after `process_alive` returned false
-function process_alive(pid) result(alive)
-    use iso_c_binding, only : c_int
-    integer, intent(in)  :: pid
-    logical              :: alive
-
-    integer :: status
-
-    interface
-        function c_kill(pid, sig) result(status) bind(c, name="kill")
-            ! TODO(emma): The of `pid` should really be `pid_t`, but on modern
-            !             platforms this is always and `int`, but still..
-            import c_int
-            integer(kind=c_int), intent(in), value :: pid
-            integer(kind=c_int), intent(in), value :: sig
-            integer(kind=c_int) :: status
-        end function c_kill
-    end interface
-
-    ! This is a common trick to check if a process is alive with POSIX C.
-    status = c_kill(pid, 0)
-    alive = status == 0
-end function process_alive
 
 end module fpm_lock
