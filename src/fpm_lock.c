@@ -37,11 +37,15 @@ void c_process_alive(pid_t *pid, bool *alive)  {
     #else
 
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, *pid);
+    if (handle == NULL) {  // Something went wrong
+        perror("c_process_alive: Couldn't obtain handle from PID\n");
+        exit(-1);
+    }
 
     DWORD exit_code;
     BOOL success = GetExitCodeProcess(handle, &exit_code);
     if (success == 0) {  // Something went wrong
-        perror("c_process_alive: Couldn't obtain exit code from handle\n");
+        perror("c_process_alive: Couldn't obtain exit code from handle");
         exit(-1);
     }
 

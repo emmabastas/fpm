@@ -5,20 +5,12 @@ module test_lock
     use fpm_filesystem, only : run
     use fpm_lock, only : fpm_lock_acquire, fpm_lock_acquire_noblock, &
                          fpm_lock_release
-    use iso_c_binding, only : c_int
+    use iso_c_binding, only : c_int, c_char, c_null_char
     use fpm_environment, only : get_os_type, OS_WINDOWS
 
     implicit none
     private
     public :: collect_lock
-
-! These C functions are defined in `test_lock.c`
-interface
-    subroutine c_dummy_process_start(pid) bind(c, name = "c_dummy_process_start")
-        import c_int
-        integer(kind=c_int), intent(out) :: pid
-    end subroutine c_dummy_process_start
-end interface
 
 contains
 
@@ -43,50 +35,52 @@ contains
         ]
     end subroutine collect_lock
 
-    subroutine delete_lock_file
-        integer :: lock_unit
-        integer :: iostat
-
-        open( &
-            file='.fpm-package-lock', &
-            status='old', &
-            newunit=lock_unit, &
-            iostat=iostat &
-            )
-
-        if (iostat == 0) close(unit=lock_unit, status="delete")
-    end subroutine delete_lock_file
-
-    subroutine dummy_process_start(pid, error)
+    subroutine dummy_process_start(pid)
         integer, intent(out) :: pid
-        type(error_t), allocatable, intent(out) :: error
+
+        interface
+            subroutine c_dummy_process_start(pid) bind(c, name = &
+                "c_dummy_process_start")
+                import c_int
+                integer(kind=c_int), intent(out) :: pid
+            end subroutine c_dummy_process_start
+        end interface
 
         call c_dummy_process_start(pid)
-        if (pid == -1) then
-            call fatal_error(error, "c_dummy_process_start failed")
-        end if
     end subroutine dummy_process_start
 
-    subroutine kill_process(pid, error)
+    subroutine lock_file(path)
+        character(len=*), intent(in) :: path
+
+        interface
+            subroutine c_lock_file(path) bind(c, name="c_lock_file")
+                import c_char
+                character(kind=c_char), dimension(*), intent(in) :: path
+            end subroutine
+        end interface
+
+        call c_lock_file(path//c_null_char)
+    end subroutine
+
+    subroutine kill_process(pid)
         integer, intent(in) :: pid
-        type(error_t), allocatable, intent(out) :: error
 
-        ! By default integers are 32-bit, and 10 decimal digits are enough to
-        ! to accommodate all possible values.
-        character(len=10) :: pid_str
-        write (pid_str, '(I0)') pid
+        interface
+            subroutine c_kill_process(pid) bind(c, name = "c_kill_process")
+                import c_int
+                integer(kind=c_int), intent(in)  :: pid
+            end subroutine c_kill_process
+        end interface
 
-        if (get_os_type() == OS_WINDOWS) then
-            call run("taskkill -f -pid " // pid_str)
-        else
-            call run("kill " // pid_str)
-        end if
+        call c_kill_process(pid)
     end subroutine kill_process
 
     subroutine simple_acquire_release(error)
         type(error_t), allocatable, intent(out) :: error
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call fpm_lock_acquire(error)
         call fpm_lock_release(error)
     end subroutine simple_acquire_release
@@ -94,7 +88,9 @@ contains
     subroutine acquire_release_acquire_release (error)
         type(error_t), allocatable, intent(out) :: error
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call fpm_lock_acquire(error)
         call fpm_lock_release(error)
         call fpm_lock_acquire(error)
@@ -103,23 +99,33 @@ contains
 
     subroutine double_acquire(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call fpm_lock_acquire(error)
         call fpm_lock_acquire(error)
+
+        ! Clean up.
+        call fpm_lock_release(dummy_error)
     end subroutine double_acquire
 
     subroutine release(error)
         type(error_t), allocatable, intent(out) :: error
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call fpm_lock_release(error)
     end subroutine release
 
     subroutine acquire_release_release(error)
         type(error_t), allocatable, intent(out) :: error
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call fpm_lock_acquire(error)
         call fpm_lock_release(error)
         call fpm_lock_release(error)
@@ -129,40 +135,54 @@ contains
     !> a lock.
     subroutine acquire_existing_lockfile_empty(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         integer :: pid
         logical :: success
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call run('touch .fpm-package-lock')
         call fpm_lock_acquire_noblock(error, success=success)
 
         if (.not. success) then
             call test_failed(error, "Failed getting a package lock")
         end if
+
+        ! Clean up.
+        call fpm_lock_release(dummy_error)
+        call run('rm -f .fpm-package-lock')
     end subroutine acquire_existing_lockfile_empty
 
     !> If a lock-file already exists but as some invalid content then we should
     !> acquire a lock.
     subroutine acquire_existing_lockfile_garbled(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         integer :: pid
         logical :: success
 
-        call delete_lock_file()
+        ! Clean up if needed.
+        call run('rm -f .fpm-package-lock')
+
         call run('echo "Lorem ipsum dolor sit amet" > .fpm-package-lock')
         call fpm_lock_acquire_noblock(error, success=success)
+        if (allocated(error)) return
 
         if (.not. success) then
             call test_failed(error, "Failed getting a package lock")
         end if
 
-        call fpm_lock_release(error)
+        ! Clean up.
+        call fpm_lock_release(dummy_error)
+        call run('rm -f .fpm-package-lock')
     end subroutine acquire_existing_lockfile_garbled
 
     !> If a lock-file already exists and and was created by a still-running
     !> process then we shouldn't acquire a lock.
     subroutine acquire_existing_lockfile_valid(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         integer :: pid
         logical :: success
 
@@ -170,8 +190,7 @@ contains
         call run('rm -f .fpm-package-lock')
 
         ! Simulate some other process.
-        call dummy_process_start(pid, error)
-        if (allocated(error)) return
+        call dummy_process_start(pid)
 
         ! Pretend that the other process acquired a package lock.
         call fpm_lock_acquire_noblock(error, pid=pid, success=success)
@@ -200,7 +219,9 @@ contains
         end if
 
         ! Clean up.
-        call kill_process(pid, error)
+        call kill_process(pid)
+        call fpm_lock_release(dummy_error)
+        call run('rm -f .fpm-package-lock')
     end subroutine acquire_existing_lockfile_valid
 
     !> If a valid lock-file already exists but it was created by a now-dead
@@ -208,6 +229,7 @@ contains
     !> should still acquire a lock. (this is a very rare edge-case)
     subroutine acquire_existing_lockfile_same_pid(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         logical :: success
 
         ! Clean up if needed.
@@ -239,13 +261,15 @@ contains
         end if
 
         ! Clean up.
-        call fpm_lock_release(error)
+        call fpm_lock_release(dummy_error)
+        call run('rm -f .fpm-package-lock')
     end subroutine acquire_existing_lockfile_same_pid
 
     !> If a valid lock-file already exists but it was created by a now-dead
     !> process then we should acquire a lock.
     subroutine acquire_existing_lockfile_dead_pid(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         integer :: pid
         logical :: success
 
@@ -253,8 +277,7 @@ contains
         call run('rm -f .fpm-package-lock')
 
         ! Simulate some other process.
-        call dummy_process_start(pid, error)
-        if (allocated(error)) return
+        call dummy_process_start(pid)
 
         ! Pretend that the other process acquires a packag lock.
         call fpm_lock_acquire_noblock(error, pid=pid, success=success)
@@ -272,10 +295,9 @@ contains
         call run('mv .fpm-package-lock.dup .fpm-package-lock')
 
         ! Ooops the process died.
-        call kill_process(pid, error)
-        if (allocated(error)) return
+        call kill_process(pid)
 
-        ! Since the other process is dead we expect this to succeed (but it
+        ! Since the other process is dead we expect this to not succeed (but it
         ! souldn't raise an error).
         call fpm_lock_acquire_noblock(error, success=success)
         if (allocated(error)) return
@@ -287,20 +309,33 @@ contains
         end if
 
         ! Clean up.
-        call fpm_lock_release(error)
+        call fpm_lock_release(dummy_error)
+        call run('rm -f .fpm-package-lock')
     end subroutine acquire_existing_lockfile_dead_pid
 
     !> If a lock-file already exists and some other process has opened it for
     !> reading or writing then we shouldn't acquire a lock.
     subroutine acquire_already_opened_lockfile(error)
         type(error_t), allocatable, intent(out) :: error
+        type(error_t), allocatable :: dummy_error
         logical :: success
+        integer :: pid
 
         ! Clean up if needed.
         call run('rm -f .fpm-package-lock')
 
         ! Create a lock-file and keep it open indefinitely
-        call run('touch .fpm-package-lock && tail -f .fpm-package-lock &')
+        call run('touch .fpm-package-lock')
+        call lock_file('.fpm-package-lock')
+
+        call dummy_process_start(pid)
+        !if (get_os_type() == OS_WINDOWS) then
+        !    ! Thank you https://superuser.com/a/649819
+        !    call run("ln -s C:\\Windows\\System32\\notepad.exe fpm-notepad.exe")
+        !    call run("start -min fpm.notepad > .fpm-package-lock &")
+        !else
+        !    call run('touch .fpm-package-lock && tail -f .fpm-package-lock &')
+        !end if
 
         ! Even though the lock file is empty we expect that no lock is
         ! acquired since another process actively has the lock-file open.
@@ -314,6 +349,8 @@ contains
         end if
 
         ! Clean up.
+        call kill_process(pid)
+        call fpm_lock_release(dummy_error)
         call run('rm -f .fpm-package-lock')
     end subroutine acquire_already_opened_lockfile
 end module test_lock

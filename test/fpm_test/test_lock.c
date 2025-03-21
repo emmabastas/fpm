@@ -1,16 +1,13 @@
 #define _POSIX_SOURCE
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <signal.h>
-#include <stdlib.h>
 #include <stdbool.h>
-#include <errno.h>
+#include <fcntl.h>
 
 #ifndef _WIN32
 
 #include <sys/wait.h>
+#include <errno.h>
 
 #else
 
@@ -21,18 +18,19 @@
 
 #endif
 
-// Start a process that does nothing, returns the PID of the new process in
-// `pid_ret`.
 void c_dummy_process_start(pid_t *pid_ret) {
 #ifndef _WIN32  // POSIX implementation.
     *pid_ret = fork();
     if (*pid_ret == -1) {  // Something went wrong.
+        perror("c_dummy_process_start: Couldn't fork");
         exit(-1);
     }
 
     if (*pid_ret == 0) {
         while(1) { sleep(1); }
     }
+
+    return;
 #else  // Windows implementation.
     STARTUPINFO sinfo;
     PROCESS_INFORMATION pinfo;
@@ -42,7 +40,7 @@ void c_dummy_process_start(pid_t *pid_ret) {
 
     // We just want some random windows .exe that does nothing.
     BOOL success = CreateProcessA("C:\\Windows\\System32\\timeout.exe",
-                                  "/t 99999",
+                                  "/t 9999",
                                   NULL,
                                   NULL,
                                   false,
@@ -67,4 +65,59 @@ void c_dummy_process_start(pid_t *pid_ret) {
         exit(-1);
     }
 #endif
+}
+
+void c_kill_process(pid_t *pid) {
+#ifndef _WIN32
+    // Kill the process.
+    int stat = kill(*pid, SIGKILL);
+
+    if (stat == -1) {
+        perror("c_kill_process: Couldn't kill process");
+        exit(-1);
+    }
+
+    // Wait until process has actually died.
+    while(true) {
+        int status;
+        int ret = waitpid(*pid, &status, 0);
+        if (ret == *pid) {  // The child process was killed.
+            return;
+        }
+
+        if (ret == -1 && errno == ECHILD) {  // The child process was killed
+                                             // before we entered the loop.
+            return;
+        }
+
+        // Something went wrong
+        perror("c_kill_process: Couldn't get process status");
+        exit(-1);
+    }
+#else
+    HANDLE handle = OpenProcess(PROCESS_TERMINATE, false, *pid);
+    if (handle == NULL) {  // Something went wrong.
+        perror("c_kill_process: Couldn't obtain handle from PID");
+        exit(-1);
+    }
+
+    BOOL success = TerminateProcess(handle, 9);
+
+    if(CloseHandle(handle) == 0) {  // Something went wrong.
+        perror("c_kill_process: Couldn't close handle.");
+        exit(-1);
+    }
+
+    if (success == 0) {
+        perror("c_kill_process: Couldn't terminate process.");
+        exit(-1);
+    }
+#endif
+}
+
+void c_lock_file(char *path) {
+    int ret = open(path, O_RDWR);
+    if (ret == -1) {
+        perror("c_lock_file: Couldn't open file");
+    }
 }
