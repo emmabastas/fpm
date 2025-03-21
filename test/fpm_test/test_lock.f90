@@ -49,19 +49,6 @@ contains
         call c_dummy_process_start(pid)
     end subroutine dummy_process_start
 
-    subroutine lock_file(path)
-        character(len=*), intent(in) :: path
-
-        interface
-            subroutine c_lock_file(path) bind(c, name="c_lock_file")
-                import c_char
-                character(kind=c_char), dimension(*), intent(in) :: path
-            end subroutine
-        end interface
-
-        call c_lock_file(path//c_null_char)
-    end subroutine
-
     subroutine kill_process(pid)
         integer, intent(in) :: pid
 
@@ -74,6 +61,34 @@ contains
 
         call c_kill_process(pid)
     end subroutine kill_process
+
+    function lock_file(path) result(fd)
+        character(len=*), intent(in) :: path
+        integer :: fd
+
+        interface
+            function c_lock_file(path) result(fd) bind(c, name="c_lock_file")
+                import c_int, c_char
+                character(kind=c_char), dimension(*), intent(in) :: path
+                integer(kind=c_int) :: fd
+            end function
+        end interface
+
+        fd = c_lock_file(path//c_null_char)
+    end function
+
+    subroutine unlock_file(fd)
+        integer :: fd
+
+        interface
+            subroutine c_unlock_file(fd) bind(c, name="c_unlock_file")
+                import c_int
+                integer(kind=c_int) :: fd
+            end subroutine c_unlock_file
+        end interface
+
+        call c_unlock_file(fd)
+    end subroutine unlock_file
 
     subroutine simple_acquire_release(error)
         type(error_t), allocatable, intent(out) :: error
@@ -320,22 +335,16 @@ contains
         type(error_t), allocatable :: dummy_error
         logical :: success
         integer :: pid
+        integer :: fd
 
         ! Clean up if needed.
         call run('rm -f .fpm-package-lock')
 
         ! Create a lock-file and keep it open indefinitely
         call run('touch .fpm-package-lock')
-        call lock_file('.fpm-package-lock')
+        fd = lock_file('.fpm-package-lock')
 
         call dummy_process_start(pid)
-        !if (get_os_type() == OS_WINDOWS) then
-        !    ! Thank you https://superuser.com/a/649819
-        !    call run("ln -s C:\\Windows\\System32\\notepad.exe fpm-notepad.exe")
-        !    call run("start -min fpm.notepad > .fpm-package-lock &")
-        !else
-        !    call run('touch .fpm-package-lock && tail -f .fpm-package-lock &')
-        !end if
 
         ! Even though the lock file is empty we expect that no lock is
         ! acquired since another process actively has the lock-file open.
@@ -349,6 +358,7 @@ contains
         end if
 
         ! Clean up.
+        call unlock_file(fd)
         call kill_process(pid)
         call fpm_lock_release(dummy_error)
         call run('rm -f .fpm-package-lock')

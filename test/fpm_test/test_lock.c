@@ -115,9 +115,18 @@ void c_kill_process(pid_t *pid) {
 #endif
 }
 
-void c_lock_file(char *path) {
+int c_lock_file(char *path) {
     int ret = open(path, O_RDWR);
     if (ret == -1) {
         perror("c_lock_file: Couldn't open file");
     }
+    return ret;
 }
+
+void c_unlock_file(int fd) {
+    int ret = close(fd);
+    if (ret == -1) {
+        perror("c_close_file: Couldnät close file");
+    }
+}
+

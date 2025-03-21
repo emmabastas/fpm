@@ -159,19 +159,11 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
     if (exists) then
         read(unit=lock_unit, fmt='(1I256)', iostat=iostat, iomsg=iomsg) lock_pid
 
-        ! If iostat is positive some error occured.
-        if (iostat > 0) then
-            call fatal_error(error, "Error reading lock-file '"//iomsg//"'")
-            close(unit=lock_unit)
-            if (present(success)) success = .false.
-            return
-        end if
-
         ! If iostat is zero then we managed to parse an integer in the lock-file
         ! If the parsed integer corresponds to the PID of a running process that
         ! isn't this current process then that process has the lock.
         if (iostat == 0 .and. lock_pid /= pid_local) then
-            ! Fortran doesn't short-circut boolean expressions, hence the
+            ! Fortran doesn't short-circuit boolean expressions, hence the
             ! nesting; We only want to check `process_alive` if `lock_pid` is
             ! valid!
             if (process_alive(lock_pid)) then
@@ -183,6 +175,12 @@ subroutine fpm_lock_acquire_noblock(error, success, pid)
 
         ! At this point we conclude that although the lock-file already existed
         ! it wasn't valid, so we should go ahead an acquire the lock.
+
+        ! BUG(@emmabastas) If the read statement fails it's probably because
+        ! the lock-file didn't contain valid data, but it can fail more other
+        ! reasons too with no way of distinguishing between them in a portable
+        ! way. Ideally we would want to call fatal_error if the read statement
+        ! failed for some unexpected reason.
     end if
 
     rewind(unit=lock_unit, iostat=iostat, iomsg=iomsg)
