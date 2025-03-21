@@ -2,47 +2,69 @@
 
 #include <stdio.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
 
-void c_dummy_process_start(pid_t *pid) {
-    *pid = fork();
-    if (*pid == -1) {  // Something went wrong.
+#ifndef _WIN32
+
+#include <sys/wait.h>
+
+#else
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#define pid_t DWORD
+
+#endif
+
+// Start a process that does nothing, returns the PID of the new process in
+// `pid_ret`.
+void c_dummy_process_start(pid_t *pid_ret) {
+#ifndef _WIN32  // POSIX implementation.
+    *pid_ret = fork();
+    if (*pid_ret == -1) {  // Something went wrong.
         exit(-1);
     }
 
-    if (*pid == 0) {
+    if (*pid_ret == 0) {
         while(1) { sleep(1); }
     }
-}
+#else  // Windows implementation.
+    STARTUPINFO sinfo;
+    PROCESS_INFORMATION pinfo;
 
-void c_kill_process(pid_t *pid, int *stat) {
-    // Kill the process.
-    *stat = kill(*pid, SIGKILL);
+    ZeroMemory(&sinfo, sizeof(sinfo));
+    sinfo.cb = sizeof(sinfo);
 
-    if (*stat == -1) {
-        return;
+    // We just want some random windows .exe that does nothing.
+    BOOL success = CreateProcessA("C:\\Windows\\System32\\timeout.exe",
+                                  "/t 99999",
+                                  NULL,
+                                  NULL,
+                                  false,
+                                  NORMAL_PRIORITY_CLASS,
+                                  NULL,
+                                  NULL,
+                                  &sinfo,
+                                  &pinfo
+    );
+
+    if (success == 0) {  // Something went wrong.
+        perror("c_dummy_process_start: Couldn't start dummy process\n");
+        exit(-1);
+    } else {
+        *pid_ret = pinfo.dwProcessId;
     }
 
-    // Wait until process has actually died.
-    while(true) {
-        int status;
-        int ret = waitpid(*pid, &status, 0);
-
-        if (ret == *pid) {  // The child process was killed.
-            return;
-        }
-
-        if (ret == -1 && errno == ECHILD) {  // The child process was killed
-                                             // before we entered the loop.
-            return;
-        }
-
-        // Something went wrong
+    success &= CloseHandle(pinfo.hProcess);
+    success &= CloseHandle(pinfo.hThread);
+    if (success == 0) {  // Something went wrong.
+        perror("c_dummy_process_start: Couldn't close handles\n");
         exit(-1);
     }
+#endif
 }
