@@ -6,6 +6,7 @@ module test_lock
     use fpm_lock, only : fpm_lock_acquire, fpm_lock_acquire_noblock, &
                          fpm_lock_release
     use iso_c_binding, only : c_int
+    use fpm_environment, only : get_os_type, OS_WINDOWS
 
     implicit none
     private
@@ -17,12 +18,6 @@ interface
         import c_int
         integer(kind=c_int), intent(out) :: pid
     end subroutine c_dummy_process_start
-
-    subroutine c_kill_process(pid, stat) bind(c, name = "c_kill_process")
-        import c_int
-        integer(kind=c_int), intent(in)  :: pid
-        integer(kind=c_int), intent(out) :: stat
-    end subroutine c_kill_process
 end interface
 
 contains
@@ -75,11 +70,16 @@ contains
     subroutine kill_process(pid, error)
         integer, intent(in) :: pid
         type(error_t), allocatable, intent(out) :: error
-        integer :: ret
 
-        call c_kill_process(pid, ret)
-        if (ret == -1) then
-            call fatal_error(error, "c_kill_process failed")
+        ! By default integers are 32-bit, and 10 decimal digits are enough to
+        ! to accommodate all possible values.
+        character(len=10) :: pid_str
+        write (pid_str, '(I0)') pid
+
+        if (get_os_type() == OS_WINDOWS) then
+            call run("taskkill -f -pid " // pid_str)
+        else
+            call run("kill " // pid_str)
         end if
     end subroutine kill_process
 
